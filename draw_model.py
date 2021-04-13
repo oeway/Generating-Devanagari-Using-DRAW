@@ -29,7 +29,7 @@ class DRAWModel(nn.Module):
         self.device = params['device']
         self.channel = params['channel']
         self.num_segments = 6
-        self.num_paths = 8
+        self.num_paths = 3
 
         # Stores the generated image for each time step.
         self.cs = [0] * self.T
