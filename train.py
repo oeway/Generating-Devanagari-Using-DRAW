@@ -23,7 +23,7 @@ def generate_image(epoch):
 
 # Dictionary storing network parameters.
 params = {
-    'T' : 8,# Number of glimpses.
+    'T' : 5,# Number of glimpses.
     'batch_size': 128,# Batch size.
     'A' : 32,# Image width
     'B': 32,# Image height
@@ -89,7 +89,6 @@ for epoch in range(params['epoch_num']):
     epoch_start_time = time.time()
     
     for i, (data, _ ) in enumerate(train_loader, 0):
-        print(i)
         # Get batch size.
         bs = data.size(0)
         # Flatten the image.
@@ -112,10 +111,14 @@ for epoch in range(params['epoch_num']):
                   % (epoch+1, params['epoch_num'], i, len(train_loader), avg_loss / 100))
 
             avg_loss = 0
+        with torch.no_grad():
+            generate_image(epoch+1)
         
         losses.append(loss_val)
         iters += 1
 
+        print(i, avg_loss/(i+1))
+    
     avg_loss = 0
     epoch_time = time.time() - epoch_start_time
     print("Time Taken for Epoch %d: %.2fs" %(epoch + 1, epoch_time))

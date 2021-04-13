@@ -28,8 +28,8 @@ class DRAWModel(nn.Module):
         self.dec_size = params['dec_size']
         self.device = params['device']
         self.channel = params['channel']
-        self.num_segments = 6
-        self.num_paths = 3
+        self.num_segments = 3
+        self.num_paths = 1
 
         # Stores the generated image for each time step.
         self.cs = [0] * self.T
@@ -47,7 +47,9 @@ class DRAWModel(nn.Module):
 
         self.decoder = nn.LSTMCell(self.z_size, self.dec_size)
 
-        self.fc_write = nn.Linear(self.dec_size, self.num_paths*(2 * (self.num_segments + 1)+self.num_segments+1+1))
+        self.fc_write = nn.Linear(self.dec_size, self.num_paths*(2 * (self.num_segments + 1)+1+1))
+
+        self.fc_emb = nn.Linear(self.dec_size, self.dec_size)
 
         # To get the attention parameters. 5 in total.
         self.fc_attention = nn.Linear(self.dec_size, 5)
@@ -65,7 +67,7 @@ class DRAWModel(nn.Module):
         for t in range(self.T):
             c_prev = torch.zeros(self.batch_size, self.B*self.A*self.channel, requires_grad=True, device=self.device) if t == 0 else self.cs[t-1]
             # Equation 3.
-            x_hat = x - torch.sigmoid(c_prev)
+            x_hat = x - c_prev # torch.sigmoid(c_prev)
             # Equation 4.
             # Get the N x N glimpse.
             r_t = self.read(x, x_hat, h_dec_prev)
@@ -79,7 +81,7 @@ class DRAWModel(nn.Module):
             self.cs[t] = c_prev + self.write(h_dec)
 
             h_enc_prev = h_enc
-            h_dec_prev = h_dec
+            h_dec_prev = self.fc_emb(h_dec)
 
     def read(self, x, x_hat, h_dec_prev):
         # Using attention
@@ -116,12 +118,13 @@ class DRAWModel(nn.Module):
             index = 0
            
             for i in range(num_paths):
-                points = img_size * out[b, index: index + 2 * (num_segments + 1)].view(-1, 2)
+                points = img_size * out[b, index: index + 2 * (num_segments + 1) + num_segments].view(-1, 2) + img_size//2
                 index += 2 * (num_segments + 1)
-                stroke_width = img_size * out[b, index:index+num_segments+1].view(num_segments+1)
-                index += num_segments + 1
+                stroke_width = out[b, index]
+                index += 1
+                
 
-                num_control_points = torch.zeros(num_segments, dtype = torch.int32, device=self.device)
+                num_control_points = torch.zeros(int(np.log2(num_segments)), dtype = torch.int32, device=self.device) + 2
                 path = pydiffvg.Path(num_control_points = num_control_points,
                                     points = points,
                                     is_closed = False,
@@ -130,7 +133,7 @@ class DRAWModel(nn.Module):
 
                 stroke_color = out[b, index].view(1)
                 index += 1
-                stroke_color = torch.cat([stroke_color, torch.tensor([0.0, 0.0, 1.0]).to(self.device)])
+                stroke_color = torch.cat([stroke_color, stroke_color, stroke_color, torch.tensor([1.0]).to(self.device)])
                 path_group = pydiffvg.ShapeGroup(shape_ids = torch.tensor([len(shapes) - 1]),
                                                     fill_color = None,
                                                     stroke_color = stroke_color)
@@ -147,7 +150,9 @@ class DRAWModel(nn.Module):
             imgs.append(img[:,:,:3])
             
         img = torch.stack(imgs, dim = 0)
-        return img.view(out.shape[0], -1)
+        # channel last to channel first
+        img = img.permute(0,3,1,2)
+        return img.reshape(out.shape[0], -1)
 
     def write(self, h_dec):
         # Using attention
@@ -235,8 +240,12 @@ class DRAWModel(nn.Module):
     def loss(self, x, y):
         self.forward(x)
 
+        
         criterion = nn.MSELoss()#nn.BCELoss()
         x_recon = self.cs[-1] # torch.sigmoid(self.cs[-1])
+
+        pydiffvg.imwrite(y[0].reshape([3,32, 32]).cpu().permute(1,2,0), './in.png')
+        pydiffvg.imwrite(x_recon[0].reshape([3,32, 32]).cpu().permute(1,2,0), './out.png')
         # Reconstruction loss.
         # Only want to average across the mini-batch, hence, multiply by the image dimensions.
         Lx = criterion(x_recon, y) * self.A * self.B * self.channel
@@ -266,13 +275,14 @@ class DRAWModel(nn.Module):
             z = torch.randn(self.batch_size, self.z_size, device=self.device)
             h_dec, dec_state = self.decoder(z, (h_dec_prev, dec_state))
             self.cs[t] = c_prev + self.write(h_dec)
-            h_dec_prev = h_dec
+            h_dec_prev = self.fc_emb(h_dec)
 
         imgs = []
 
         for img in self.cs:
             # The image dimesnion is B x A (According to the DRAW paper).
             img = img.view(-1, self.channel, self.B, self.A)
-            imgs.append(vutils.make_grid(torch.sigmoid(img).detach().cpu(), nrow=int(np.sqrt(int(num_output))), padding=1, normalize=True, pad_value=1))
+            #img = torch.sigmoid(img)
+            imgs.append(vutils.make_grid(img.detach().cpu(), nrow=int(np.sqrt(int(num_output))), padding=1, normalize=True, pad_value=1))
 
         return imgs
