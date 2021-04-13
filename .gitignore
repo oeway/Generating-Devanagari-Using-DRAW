@@ -1,6 +1,7 @@
 data/*
 model_epoch_*
 *.png
+model_final
 ipynb_checkpoints
 .vscode
 ipynb_checkpoints
