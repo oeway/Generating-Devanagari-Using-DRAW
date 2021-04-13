@@ -235,8 +235,8 @@ class DRAWModel(nn.Module):
     def loss(self, x, y):
         self.forward(x)
 
-        criterion = nn.BCELoss()
-        x_recon = torch.sigmoid(self.cs[-1])
+        criterion = nn.MSELoss()#nn.BCELoss()
+        x_recon = self.cs[-1] # torch.sigmoid(self.cs[-1])
         # Reconstruction loss.
         # Only want to average across the mini-batch, hence, multiply by the image dimensions.
         Lx = criterion(x_recon, y) * self.A * self.B * self.channel
