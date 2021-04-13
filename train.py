@@ -111,8 +111,8 @@ for epoch in range(params['epoch_num']):
                   % (epoch+1, params['epoch_num'], i, len(train_loader), avg_loss / 100))
 
             avg_loss = 0
-        with torch.no_grad():
-            generate_image(epoch+1)
+            with torch.no_grad():
+                generate_image(epoch+1)
         
         losses.append(loss_val)
         iters += 1
