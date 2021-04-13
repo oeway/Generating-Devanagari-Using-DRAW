@@ -2,12 +2,17 @@ import torch
 import torch.nn as nn
 import torchvision.utils as vutils
 import numpy as np
+import pydiffvg
+import random
 
 """
 The equation numbers on the comments corresponding
 to the relevant equation given in the paper:
 DRAW: A Recurrent Neural Network For Image Generation.
 """
+
+pydiffvg.set_use_gpu(torch.cuda.is_available())
+
 
 class DRAWModel(nn.Module):
     def __init__(self, params):
@@ -23,6 +28,8 @@ class DRAWModel(nn.Module):
         self.dec_size = params['dec_size']
         self.device = params['device']
         self.channel = params['channel']
+        self.num_segments = 6
+        self.num_paths = 8
 
         # Stores the generated image for each time step.
         self.cs = [0] * self.T
@@ -40,7 +47,7 @@ class DRAWModel(nn.Module):
 
         self.decoder = nn.LSTMCell(self.z_size, self.dec_size)
 
-        self.fc_write = nn.Linear(self.dec_size, self.write_N*self.write_N*self.channel)
+        self.fc_write = nn.Linear(self.dec_size, self.num_paths*(2 * (self.num_segments + 1)+self.num_segments+1+1))
 
         # To get the attention parameters. 5 in total.
         self.fc_attention = nn.Linear(self.dec_size, 5)
@@ -98,23 +105,70 @@ class DRAWModel(nn.Module):
         # No attention
         #return torch.cat((x, x_hat), dim=1)
 
+    def render(self, out):
+        num_paths = self.num_paths
+        img_size = self.A
+        num_segments = self.num_segments
+        imgs = []
+        for b in range(out.shape[0]):
+            shapes = []
+            shape_groups = []
+            index = 0
+           
+            for i in range(num_paths):
+                points = img_size * out[b, index: index + 2 * (num_segments + 1)].view(-1, 2)
+                index += 2 * (num_segments + 1)
+                stroke_width = img_size * out[b, index:index+num_segments+1].view(num_segments+1)
+                index += num_segments + 1
+
+                num_control_points = torch.zeros(num_segments, dtype = torch.int32, device=self.device)
+                path = pydiffvg.Path(num_control_points = num_control_points,
+                                    points = points,
+                                    is_closed = False,
+                                    stroke_width = stroke_width)
+                shapes.append(path)
+
+                stroke_color = out[b, index].view(1)
+                index += 1
+                stroke_color = torch.cat([stroke_color, torch.tensor([0.0, 0.0, 1.0]).to(self.device)])
+                path_group = pydiffvg.ShapeGroup(shape_ids = torch.tensor([len(shapes) - 1]),
+                                                    fill_color = None,
+                                                    stroke_color = stroke_color)
+                shape_groups.append(path_group)
+            scene_args = pydiffvg.RenderFunction.serialize_scene(img_size, img_size, shapes, shape_groups)
+            render = pydiffvg.RenderFunction.apply
+            img = render(img_size, # width
+                        img_size, # height
+                        2,   # num_samples_x
+                        2,   # num_samples_y
+                        random.randint(0, 1048576), # seed
+                        None,
+                        *scene_args)
+            imgs.append(img[:,:,:3])
+            
+        img = torch.stack(imgs, dim = 0)
+        return img.view(out.shape[0], -1)
+
     def write(self, h_dec):
         # Using attention
         # Equation 28.
         w = self.fc_write(h_dec)
-        if self.channel == 3:
-            w = w.view(self.batch_size, 3, self.write_N, self.write_N)
-        elif self.channel == 1:
-            w = w.view(self.batch_size, self.write_N, self.write_N)
 
-        (Fx, Fy), gamma = self.attn_window(h_dec, self.write_N)
-        Fyt = Fy.transpose(self.channel, 2)
+        return self.render(w)
+        
+        # if self.channel == 3:
+        #     w = w.view(self.batch_size, 3, self.write_N, self.write_N)
+        # elif self.channel == 1:
+        #     w = w.view(self.batch_size, self.write_N, self.write_N)
 
-        # Equation 29.
-        wr = torch.matmul(Fyt, torch.matmul(w, Fx))
-        wr = wr.view(self.batch_size, self.B*self.A*self.channel)
+        # (Fx, Fy), gamma = self.attn_window(h_dec, self.write_N)
+        # Fyt = Fy.transpose(self.channel, 2)
 
-        return wr / gamma.view(-1, 1).expand_as(wr)
+        # # Equation 29.
+        # wr = torch.matmul(Fyt, torch.matmul(w, Fx))
+        # wr = wr.view(self.batch_size, self.B*self.A*self.channel)
+
+        # return wr / gamma.view(-1, 1).expand_as(wr)
         # No attention
         #return self.fc_write(h_dec)
 
@@ -178,14 +232,14 @@ class DRAWModel(nn.Module):
 
         return Fx, Fy
 
-    def loss(self, x):
+    def loss(self, x, y):
         self.forward(x)
 
         criterion = nn.BCELoss()
         x_recon = torch.sigmoid(self.cs[-1])
         # Reconstruction loss.
         # Only want to average across the mini-batch, hence, multiply by the image dimensions.
-        Lx = criterion(x_recon, x) * self.A * self.B * self.channel
+        Lx = criterion(x_recon, y) * self.A * self.B * self.channel
         # Latent loss.
         Lz = 0
 

@@ -10,6 +10,7 @@ from torchvision import datasets, transforms
 from draw_model import DRAWModel
 from dataloader import get_data
 
+
 # Function to generate new images and save the time-steps as an animation.
 def generate_image(epoch):
     x = model.generate(64)
@@ -22,7 +23,7 @@ def generate_image(epoch):
 
 # Dictionary storing network parameters.
 params = {
-    'T' : 25,# Number of glimpses.
+    'T' : 8,# Number of glimpses.
     'batch_size': 128,# Batch size.
     'A' : 32,# Image width
     'B': 32,# Image height
@@ -35,7 +36,7 @@ params = {
     'learning_rate': 1e-3,# Learning rate.
     'beta1': 0.5,
     'clip': 5.0,
-    'save_epoch' : 10,# After how many epochs to save checkpoints and generate test output.
+    'save_epoch' : 1,# After how many epochs to save checkpoints and generate test output.
     'channel' : None}# Number of channels for image.(3 for RGB, etc.)
 
 # Use GPU is available else use CPU.
@@ -88,13 +89,15 @@ for epoch in range(params['epoch_num']):
     epoch_start_time = time.time()
     
     for i, (data, _ ) in enumerate(train_loader, 0):
+        print(i)
         # Get batch size.
         bs = data.size(0)
         # Flatten the image.
         data = data.view(bs, -1).to(device)
         optimizer.zero_grad()
         # Calculate the loss.
-        loss = model.loss(data)
+        data_in = data + torch.randn(data.size()).to(device)
+        loss = model.loss(data_in, data)
         loss_val = loss.cpu().data.numpy()
         avg_loss += loss_val
         # Calculate the gradients.
